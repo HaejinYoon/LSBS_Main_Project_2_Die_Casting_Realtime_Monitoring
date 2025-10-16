@@ -767,7 +767,7 @@ def main_page(selected_tab: str):
     }
     tab_contents = {
         "field": ui.navset_tab(
-            ui.nav_panel("실시간 대시보드", field_dashboard_ui()),
+            # ui.nav_panel("실시간 대시보드", field_dashboard_ui()),
             ui.nav_panel("생산계획 시뮬레이션", plan_page_ui())
         ),
 
