@@ -67,6 +67,13 @@ def calc_baseline_ucl(train_df, cols):
 
 
 # ============================================================
+# 📦 전역 상태 관리 (팝업, 로그)
+# ============================================================
+app_state = {}
+xr_result_df = pd.DataFrame()  # 관리도 로그 통합 저장용
+
+
+# ============================================================
 # 🔹 X-R 관리도 단계별 변수 매핑
 # ============================================================
 XR_GROUPS = {
@@ -1114,8 +1121,41 @@ def main_page(selected_tab: str):
                             ui.input_select(
                                 "mv_group",
                                 "관리 팀 선택",  # ← 라벨 변경
-                                choices=["공정 관리 팀", "생산 관리 팀", "제품 관리 팀"],  # ← 항목 이름 변경
+                                choices=["공정 관리 팀", "생산 관리 팀", "제품 관리 팀"],
                                 selected="공정 관리 팀"
+                            ),
+                            ui.tags.span(
+                                "ℹ️",
+                                title=(
+                                    "■ 공정 관리 팀\n"
+                                    "[공정 관리] 용융 단계:\n"
+                                    "  • molten_temp (용융 온도)\n"
+                                    "  • molten_volume (주입한 금속 양)\n\n"
+                                    "[공정 관리] 충진 단계:\n"
+                                    "  • sleeve_temperature (주입 관 온도)\n"
+                                    "  • EMS_operation_time (전자 교반(EMS) 가동 시간)\n"
+                                    "  • low_section_speed (하위 구간 주입 속도)\n"
+                                    "  • high_section_speed (상위 구간 주입 속도)\n"
+                                    "  • cast_pressure (주입 압력)\n\n"
+                                    "[공정 관리] 냉각 단계:\n"
+                                    "  • upper/lower_mold_temp (금형 온도)\n"
+                                    "  • Coolant_temperature (냉각수 온도)\n\n"
+                                    "■ 생산 관리 팀\n"
+                                    "[생산 관리] 생산 속도:\n"
+                                    "  • facility_operation_cycleTime (장비 전체 사이클 시간)\n"
+                                    "  • production_cycletime (실제 생산 사이클 시간)\n\n"
+                                    "■ 제품 관리 팀\n"
+                                    "[제품 관리] 제품 테스트:\n"
+                                    "  • biscuit_thickness (주조물 두께)\n"
+                                    "  • physical_strength (제품 강도)"
+                                ),
+                                style=(
+                                    "cursor:help;"
+                                    "font-size:16px;"
+                                    "margin-left:6px;"
+                                    "color:#007BFF;"
+                                    "vertical-align:middle;"
+                                )
                             ),
                             ui.output_ui("mv_group_ui")
                         ),
@@ -1134,6 +1174,36 @@ def main_page(selected_tab: str):
                                 ],
                                 selected="[공정 관리] 용융 단계"
                             ),
+                            ui.tags.span(
+                                "ℹ️",
+                                title=(
+                                    "[공정 관리] 용융 단계:\n"
+                                    "  • molten_temp (용융 온도)\n"
+                                    "  • molten_volume (주입한 금속 양)\n\n"
+                                    "[공정 관리] 충진 단계:\n"
+                                    "  • sleeve_temperature (주입 관 온도)\n"
+                                    "  • EMS_operation_time (전자 교반(EMS) 가동 시간)\n"
+                                    "  • low_section_speed (하위 구간 주입 속도)\n"
+                                    "  • high_section_speed (상위 구간 주입 속도)\n"
+                                    "  • cast_pressure (주입 압력)\n\n"
+                                    "[공정 관리] 냉각 단계:\n"
+                                    "  • upper/lower_mold_temp (금형 온도)\n"
+                                    "  • Coolant_temperature (냉각수 온도)\n\n"
+                                    "[생산 관리] 생산 속도:\n"
+                                    "  • facility_operation_cycleTime (장비 전체 사이클 시간)\n"
+                                    "  • production_cycletime (실제 생산 사이클 시간)\n\n"
+                                    "[제품 관리] 제품 테스트:\n"
+                                    "  • biscuit_thickness (주조물 두께)\n"
+                                    "  • physical_strength (제품 강도)"
+                                ),
+                                style=(
+                                    "cursor:help;"
+                                    "font-size:16px;"
+                                    "margin-left:6px;"
+                                    "color:#007BFF;"
+                                    "vertical-align:middle;"
+                                )
+                            ),
                             ui.div(
                                 ui.output_plot("xr_chart", height="1000px"),
                                 style=(
@@ -1149,7 +1219,7 @@ def main_page(selected_tab: str):
                             ui.br(),
                             ui.card(
                                 ui.card_header("📋 UCL/LCL 초과 그룹 로그"),
-                                ui.output_table("xr_log_table"),
+                                ui.output_data_frame("xr_log_table"),
                                 style=(
                                     "max-height:300px;"
                                     "overflow-y:auto;"
@@ -2134,53 +2204,74 @@ def server(input, output, session):
         return fig
     
     
+    # ============================================================
+    # ℹ️ Info 버튼 클릭 시 안내 모달 표시
+    # ============================================================
 
-    
-   
-        
-    # ===== 품질 모니터링용 관리도 출력 =====
-    # @output
-    # @render.plot
-    # @reactive.calc
-    # def xr_chart_quality():
-    #     df = current_data.get()
-    #     if df is None or df.empty:
-    #         fig, ax = plt.subplots()
-    #         ax.axis("off")
-    #         ax.text(0.5, 0.5, "데이터 수신 대기 중...", ha="center", va="center")
-    #         return fig
-    
-    #     var = input.spc_var() or "cast_pressure"
-    #     if var not in df.columns:
-    #         fig, ax = plt.subplots()
-    #         ax.axis("off")
-    #         ax.text(0.5, 0.5, f"{var} 데이터 없음", ha="center", va="center")
-    #         return fig
-    
-    #     xbar, R, limits = calc_xr_chart(df, var=var)
-    #     fig = plot_xr_chart_matplotlib(xbar, R, limits)
-    #     return fig
+    @reactive.event(input.info_mv_group)
+    def _show_info_mv_group():
+        info_html = """
+        <h4>📘 관리 팀별 주요 변수</h4>
+        <hr>
+        <b>[공정 관리 팀]</b><br>
+        - 용융 단계: molten_temp (용융 온도), molten_volume (주입한 금속 양)<br>
+        - 충진 단계: sleeve_temperature (주입 관 온도), EMS_operation_time (전자 교반 가동 시간),<br>
+          &nbsp;&nbsp;low_section_speed (하위 구간 주입 속도), high_section_speed (상위 구간 주입 속도), cast_pressure (주입 압력)<br>
+        - 냉각 단계: upper_mold_temp1~2 (상부 금형 온도), lower_mold_temp1~2 (하부 금형 온도), Coolant_temperature (냉각수 온도)<br><br>
+
+        <b>[생산 관리 팀]</b><br>
+        - 생산 속도: facility_operation_cycleTime (장비 전체 사이클 시간), production_cycletime (실제 생산 사이클 시간)<br><br>
+
+        <b>[제품 관리 팀]</b><br>
+        - 제품 테스트: biscuit_thickness (주조물 두께), physical_strength (제품 강도)
+        """
+        ui.modal_show(
+            ui.modal(
+                ui.HTML(info_html),
+                title="ℹ️ 관리 팀별 변수 안내",
+                easy_close=True
+            )
+        )
 
 
-    # @output
-    # @render.plot
-    # @reactive.calc
-    # def p_chart_quality():
-    #     df = current_data.get()
-    #     if df is None or df.empty:
-    #         fig, ax = plt.subplots()
-    #         ax.axis("off")
-    #         ax.text(0.5, 0.5, "데이터 수신 대기 중...", ha="center", va="center")
-    #         return fig
+    @reactive.event(input.info_xr_stage)
+    def _show_info_xr_stage():
+        info_html = """
+        <h4>📘 단계별 변수 및 설명</h4>
+        <hr>
+        <b>[공정 관리] 용융 단계</b><br>
+        - molten_temp : 용융 온도<br>
+        - molten_volume : 주입한 금속 양<br><br>
 
-    #     if "passorfail" not in df.columns:
-    #         fig, ax = plt.subplots()
-    #         ax.axis("off")
-    #         ax.text(0.5, 0.5, "passorfail 데이터 없음", ha="center", va="center")
-    #         return fig
+        <b>[공정 관리] 충진 단계</b><br>
+        - sleeve_temperature : 주입 관 온도<br>
+        - EMS_operation_time : 전자 교반(EMS) 가동 시간<br>
+        - low_section_speed : 하위 구간 주입 속도<br>
+        - high_section_speed : 상위 구간 주입 속도<br>
+        - cast_pressure : 주입 압력<br><br>
 
-    #     p_bar, UCL, LCL = calc_p_chart(df, var="passorfail")
-    #     return plot_p_chart_matplotlib(p_bar, UCL, LCL)
+        <b>[공정 관리] 냉각 단계</b><br>
+        - upper_mold_temp1,2 : 상부 금형 온도<br>
+        - lower_mold_temp1,2 : 하부 금형 온도<br>
+        - Coolant_temperature : 냉각수 온도<br><br>
+
+        <b>[생산 관리] 생산 속도</b><br>
+        - facility_operation_cycleTime : 장비 전체 사이클 시간<br>
+        - production_cycletime : 실제 생산 사이클 시간<br><br>
+
+        <b>[제품 관리] 제품 테스트</b><br>
+        - biscuit_thickness : 주조물 두께<br>
+        - physical_strength : 제품 강도
+        """
+        ui.modal_show(
+            ui.modal(
+                ui.HTML(info_html),
+                title="ℹ️ 단계별 변수 안내",
+                easy_close=True
+            )
+        )
+
+
     
     # ============================================================
     # 🧭 다변량 관리도 (Hotelling’s T²) 계산 함수
@@ -2884,12 +2975,18 @@ def server(input, output, session):
             print("❌ XR 품질 로그 오류:", e)
             return pd.DataFrame({"메시지": ["로그 생성 중 오류 발생."]})
 
+
+    # ============================================================
+    # 📋 XR 로그 테이블 (DataGrid 기반, 클릭 가능)
+    # ============================================================
+    xr_log_df = reactive.Value(pd.DataFrame())
+
     @output
-    @render.table
+    @render.data_frame
     def xr_log_table():
+        df = current_data_kf().tail(200)
         stage = input.xr_select()
         stage = stage.split("] ")[-1]
-        df = current_data_kf().tail(200)
 
         stage_cols = {
             "용융 단계": ["molten_temp", "molten_volume"],
@@ -2902,16 +2999,15 @@ def server(input, output, session):
         }
 
         if stage not in stage_cols:
-            return pd.DataFrame({"메시지": ["단계 선택 필요."]})
+            df_empty = pd.DataFrame({"알림": ["단계를 선택하세요."]})
+            xr_log_df.set(df_empty)
+            return render.DataGrid(df_empty, height="260px", width="100%")
 
         try:
             cols = stage_cols[stage]
-
-            # ✅ 각 변수별 로그 생성 (make_xr_overlog는 완성된 DF 반환)
             logs = [make_xr_overlog(df, c, BASELINE_XR) for c in cols]
             merged = pd.concat(logs, ignore_index=True)
 
-            # ✅ 한글 컬럼명 매핑
             col_name_map = {
                 "molten_temp": "용융 온도",
                 "molten_volume": "주입한 금속 양",
@@ -2931,15 +3027,221 @@ def server(input, output, session):
                 "physical_strength": "제품 강도",
             }
 
-            # ✅ 변수명 한글로 변경
             merged["변수"] = merged["변수"].replace(col_name_map)
+            merged["메시지"] = merged["메시지"].replace("✅", "정상").replace("⚠️", "이상")
             merged.fillna("", inplace=True)
-            return merged
+
+            xr_log_df.set(merged)
+            return render.DataGrid(
+                merged,
+                height="300px",
+                width="100%",
+                row_selection_mode="single",
+                styles={
+                    "overflow": "visible",
+                    "font-size": "13px",
+                    "text-align": "center",
+                },
+            )
 
         except Exception as e:
             print("❌ XR 로그 테이블 오류:", e)
             import traceback; traceback.print_exc()
-            return pd.DataFrame({"메시지": ["로그 표시 중 오류 발생."]})
+            df_err = pd.DataFrame({"오류": ["로그 표시 중 오류 발생."]})
+            xr_log_df.set(df_err)
+            return render.DataGrid(df_err, height="260px", width="100%")
+
+
+    # ============================================================
+    # 📈 XR 팝업 그래프용 reactive 변수 & 출력 정의 (matplotlib)
+    # ============================================================
+    xr_popup_trend_fig = reactive.Value(None)
+    xr_popup_group_values = reactive.Value([])  # ✅ 그룹 내 5개 데이터 값 저장
+
+    @output
+    @render.plot
+    def xr_popup_trend_plot():
+        fig = xr_popup_trend_fig.get()
+        if fig is None:
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(5, 3))
+            ax.text(0.5, 0.5, "데이터 없음", ha="center", va="center", fontsize=12)
+            ax.axis("off")
+            plt.tight_layout()
+            return fig
+        return fig
+
+
+    # ============================================================
+    # 🧭 XR 로그 클릭 이벤트 처리
+    # ============================================================
+    last_selected_index_xr = reactive.Value(None)
+
+    @reactive.effect
+    def _handle_xr_row_selection():
+        try:
+            selected = input.xr_log_table_selected_rows()
+            if not selected:
+                last_selected_index_xr.set(None)
+                return
+
+            idx = list(selected)[0]
+            if last_selected_index_xr() == idx:
+                return
+            last_selected_index_xr.set(idx)
+
+            df_log = xr_log_df.get()
+            if df_log is None or df_log.empty or idx >= len(df_log):
+                return
+
+            row_data = df_log.iloc[idx]
+            variable = row_data.get("변수", "")
+            message = row_data.get("메시지", "")
+            value = row_data.get("값", "")
+            limit = row_data.get("한계", "")
+            time = row_data.get("시간", "")
+
+            print(f"\n📌 XR 로그 클릭됨 → {variable}, index={idx}")
+
+            # ✅ 한글 → 실제 컬럼명 매핑 (역변환)
+            reverse_map = {
+                "용융 온도": "molten_temp",
+                "주입한 금속 양": "molten_volume",
+                "주입 관 온도": "sleeve_temperature",
+                "전자 교반(EMS) 가동 시간": "EMS_operation_time",
+                "하위 구간 주입 속도": "low_section_speed",
+                "상위 구간 주입 속도": "high_section_speed",
+                "주입 압력": "cast_pressure",
+                "상부1 금형 온도": "upper_mold_temp1",
+                "상부2 금형 온도": "upper_mold_temp2",
+                "하부1 금형 온도": "lower_mold_temp1",
+                "하부2 금형 온도": "lower_mold_temp2",
+                "냉각수 온도": "Coolant_temperature",
+                "설비 사이클 시간": "facility_operation_cycleTime",
+                "생산 사이클 시간": "production_cycletime",
+                "주조물 두께": "biscuit_thickness",
+                "제품 강도": "physical_strength",
+            }
+            real_col = reverse_map.get(variable, variable)
+
+            # ✅ 최근 3그룹 평균 비교용 matplotlib 그래프 생성 + 그룹 데이터 추출
+            import matplotlib.pyplot as plt
+            import numpy as np
+
+            df_src = current_data_kf().tail(200)
+            subgroup_size = 5
+            group_means, group_labels = [], []
+            for g in range(max(0, idx - 3), idx + 1):
+                s, e = g * subgroup_size, (g + 1) * subgroup_size
+                if e <= len(df_src) and real_col in df_src.columns:
+                    group_means.append(df_src.iloc[s:e][real_col].mean())
+                    group_labels.append(f"G{g}")
+
+            # ✅ 클릭한 그룹의 실제 5개 값 저장
+            current_group_idx = idx
+            s, e = current_group_idx * subgroup_size, (current_group_idx + 1) * subgroup_size
+            group_values = []
+            if real_col in df_src.columns and e <= len(df_src):
+                group_values = df_src.iloc[s:e][real_col].round(3).tolist()
+            xr_popup_group_values.set(group_values)
+
+            if group_means:
+                fig, ax = plt.subplots(figsize=(5, 3))
+                bars = ax.bar(group_labels, group_means, color="#A0AEC0")
+                bars[-1].set_color("#E76F51")
+                ax.set_title("최근 3그룹 평균 비교", fontsize=12)
+                ax.set_xlabel("그룹")
+                ax.set_ylabel(f"{variable} 평균값")
+                ax.grid(axis="y", linestyle="--", alpha=0.5)
+                plt.tight_layout()
+                xr_popup_trend_fig.set(fig)
+            else:
+                xr_popup_trend_fig.set(None)
+
+            # ✅ 5개 그룹 데이터 HTML 표 만들기
+            if group_values:
+                data_html = "<table style='border-collapse:collapse;width:100%;font-size:13px;text-align:center;'>"
+                data_html += "<tr><th style='border-bottom:1px solid #ccc;padding:4px;'>No</th><th style='border-bottom:1px solid #ccc;padding:4px;'>값</th></tr>"
+                for i, val in enumerate(group_values, start=1):
+                    data_html += f"<tr><td style='padding:4px;'>{i}</td><td style='padding:4px;'>{val}</td></tr>"
+                data_html += "</table>"
+            else:
+                data_html = "<div style='text-align:center;color:#777;'>데이터 없음</div>"
+
+            # ✅ 팝업 모달 표시
+            ui.modal_show(
+                ui.modal(
+                    ui.tags.h4(f"📊 {variable} - 세부 정보"),
+                    ui.tags.hr(),
+
+                    ui.HTML(f"""
+                    <div style='font-size:14px;line-height:1.7'>
+                        <b>공정 단계:</b> {input.xr_select().split('] ')[-1]}<br>
+                        <b>관리판정:</b> {message}<br>
+                        <b>값:</b> {value} &nbsp;&nbsp; <b>한계:</b> {limit}<br>
+                        <b>시간:</b> {time}
+                    </div>
+                    """),
+
+                    ui.tags.hr(),
+                    ui.output_plot("xr_popup_trend_plot"),  # ✅ matplotlib 그래프
+                    ui.HTML("""
+                    <div style='margin-top:10px;font-size:13px;color:#555'>
+                        최근 3그룹 평균 대비 추이를 표시합니다.<br>
+                        빨간 막대는 현재 그룹 평균입니다.
+                    </div>
+                    """),
+
+                    ui.tags.hr(),
+                    ui.HTML("<b>📋 해당 그룹 내 데이터 (5개)</b>"),
+                    ui.HTML(data_html),  # ✅ 그룹 내 데이터 테이블 삽입
+
+                    ui.tags.hr(),
+                    footer=ui.div(
+                        ui.input_action_button(
+                            "close_xr_modal",
+                            "닫기",
+                            class_="btn btn-outline-secondary",
+                            style="margin-right:10px;"
+                        ),
+                        ui.input_action_button(
+                            "goto_analysis_xr",
+                            "원인 분석 탭으로 이동",
+                            class_="btn btn-primary"
+                        ),
+                        style="display:flex; justify-content:space-between; margin-top:15px;"
+                    ),
+
+                    title="UCL/LCL 초과 그룹 상세",
+                    easy_close=True,
+                )
+            )
+
+        except Exception as e:
+            print(f"❌ XR 로그 클릭 처리 오류: {e}")
+            import traceback; traceback.print_exc()
+
+
+    # ============================================================
+    # 🧭 팝업 내 버튼 이벤트 처리
+    # ============================================================
+    @reactive.effect
+    @reactive.event(input.close_xr_modal)
+    def _close_xr_modal():
+        try:
+            ui.modal_remove()
+        except Exception as e:
+            print(f"❌ 모달 닫기 오류: {e}")
+
+    @reactive.effect
+    @reactive.event(input.goto_analysis_xr)
+    def _goto_analysis_xr():
+        try:
+            ui.modal_remove()
+            ui.update_navs("quality_subtabs", selected="원인 분석")
+        except Exception as e:
+            print(f"❌ 탭 이동 오류: {e}")
+
 
 
 
