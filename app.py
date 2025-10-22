@@ -10,7 +10,7 @@ import plotly.express as px
 from shinywidgets import render_plotly, output_widget
 import numpy as np
 import matplotlib
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, precision_recall_curve, auc
 import os
 from matplotlib import font_manager
 import plotly.io as pio
@@ -1016,7 +1016,6 @@ def plan_page_ui():
             ui.hr(),  
         )
     )
-
 def analysis_page_ui():
     """데이터 분석 / 모델 모니터링 탭"""
     return ui.navset_tab(
@@ -1026,48 +1025,65 @@ def analysis_page_ui():
                 ui.sidebar(
                     {"title": "모델 제어"},
 
-                    # Threshold 슬라이더
-                    ui.input_slider("analysis_threshold", "Threshold 조정",
-                                    min=0, max=1, value=0.5, step=0.01),
+                    # 🧩 Threshold 조정
+                    ui.input_slider(
+                        "analysis_threshold", "Threshold 조정",
+                        min=0, max=1, value=0.5, step=0.01
+                    ),
 
-                    # ✅ 위험 구간 슬라이더를 고정 UI로 이동
-                    ui.h6("⚠️ 위험구간 설정"),
+                    # ⚠️ 위험 구간 슬라이더 (표시는 동적 max 구간으로)
+                    ui.h6("⚠️ 위험구간 설정 (표시는 동적 max 구간 사용)"),
                     ui.input_slider("risk_low", "하한 위험", min=0.0, max=1.0, value=0.10, step=0.01),
                     ui.input_slider("risk_high", "상한 위험", min=0.0, max=1.0, value=0.90, step=0.01),
 
                     ui.hr(),
-                    ui.h5("실시간 현황 관리"),
-                    ui.output_ui("sidebar_realtime_panel"),  # 여기는 슬라이더 제외
+                    ui.h5("📡 실시간 현황 관리"),
+                    ui.output_ui("sidebar_realtime_panel"),
                     ui.br(),
                     ui.output_ui("comm_status"),
                 ),
 
-                # === 메인 패널 ===
-                ui.card(
-                    ui.card_header("실시간 예측 확률"),
-                    ui.output_plot("main_analysis_plot")
-                ),
-
+                # === 🟢 상단: 실시간 예측 + 누적 성능 지표 비교 (8개 카드 반영) ===
                 ui.layout_columns(
                     ui.card(
-                        ui.card_header("모델 응답 지연 (Latency)"),
-                        ui.output_plot("latency_plot")
+                        ui.card_header("📈 실시간 예측 확률"),
+                        ui.output_plot("main_analysis_plot")
                     ),
                     ui.card(
-                        ui.card_header("누적 성능 지표 (전체 모델 기준)"),
+                        ui.card_header("📊 누적 성능 지표 (Baseline vs Current, 8개 비교)"),
                         ui.output_ui("metric_cards")
                     ),
                     col_widths=[6, 6]
                 ),
 
-                ui.card(
-                    ui.card_header("실시간 예측 로그"),
-                    ui.output_ui("log_viewer")
+                # === 🟡 중단: PRC & Threshold–Metric Curve ===
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("🎯 Precision–Recall Curve (PRC)"),
+                        ui.output_plot("pr_curve_plot")
+                    ),
+                    ui.card(
+                        ui.card_header("⚙️ Threshold–Metric Curve (Acc / Prec / Rec / F1)"),
+                        ui.output_plot("threshold_metric_curve_plot")
+                    ),
+                    col_widths=[6, 6]
+                ),
+
+                # === 🔵 하단: 응답지연(3σ 모니터링) + 로그 ===
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("⏱ 모델 응답 지연 (Latency ±3σ 감시)"),
+                        ui.output_plot("latency_plot")
+                    ),
+                    ui.card(
+                        ui.card_header("📋 실시간 예측 로그"),
+                        ui.output_ui("log_viewer")
+                    ),
+                    col_widths=[6, 6]
                 )
             )
         )
     )
-
 
 # ======== 3️⃣ 본문 페이지 ========
 def main_page(selected_tab: str):
@@ -5140,14 +5156,11 @@ def server(input, output, session):
 # 🟢 TAB2. 품질 끝
 # ============================================================
 # ============================================================
-    # 🟢 TAB3. 데이터 분석 (오른쪽 상단 스트리밍 제어 기반)
-    # ======================================================
-    # ⚙️ KFStreamer 기반 실시간 데이터 스트리밍
-    # ======================================================
+    # 🟢 TAB3. 데이터 분석 / 모델 모니터링
+    # ============================================================
 
-   
     # ------------------------------------------------------
-    # ⚙️ 스트리밍 제어 버튼 (UI)
+    # ⚙️ 스트리밍 제어 패널 (UI)
     # ------------------------------------------------------
     @render.ui
     def sidebar_realtime_panel():
@@ -5161,13 +5174,6 @@ def server(input, output, session):
             last_ts = str(ts.iloc[-1]) if not ts.isna().all() else "-"
             avg_prob = f"{df['predict_prob'].tail(50).mean():.3f}"
 
-        sliders = ui.div(
-            ui.h6("⚠️ 위험구간 설정"),
-            ui.input_slider("risk_low", "하한 위험", min=0.0, max=1.0, value=0.10, step=0.01),
-            ui.input_slider("risk_high", "상한 위험", min=0.0, max=1.0, value=0.90, step=0.01),
-            class_="mt-3"
-        )
-
         html = f"""
         <div style='font-size:14px; line-height:1.6'>
         <h6>📶 실시간 제어 상황</h6>
@@ -5179,13 +5185,14 @@ def server(input, output, session):
         </div>
         """
         return ui.div(
-    ui.HTML(html),
-    ui.input_action_button(
-        "toggle_stream",
-        "▶ 스트리밍 시작 / 정지",
-        class_="btn btn-outline-primary w-100 mt-3"
-    )
-)
+            ui.HTML(html),
+            ui.input_action_button(
+                "toggle_stream",
+                "▶ 스트리밍 시작 / 정지",
+                class_="btn btn-outline-primary w-100 mt-3"
+            )
+        )
+
 
     # ------------------------------------------------------
     # ▶ 스트리밍 토글
@@ -5201,16 +5208,16 @@ def server(input, output, session):
         else:
             print("⏹ 스트리밍 중지됨")
 
+
     # ------------------------------------------------------
     # 📊 누적 성능 지표 계산 함수
     # ------------------------------------------------------
     def get_metrics(df):
         """전체 데이터 기준 누적 성능 지표 및 요약 통계"""
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+
         if df.empty or "predict" not in df or "passorfail" not in df:
-            return {
-                "Accuracy": 0.0, "Precision": 0.0, "Recall": 0.0, "F1": 0.0,
-                "Total": 0, "Mismatch": 0, "Avg_Prob": 0.0
-            }
+            return {"Accuracy": 0, "Precision": 0, "Recall": 0, "F1": 0, "Total": 0, "Mismatch": 0, "Avg_Prob": 0}
 
         y_true = df["passorfail"]
         y_pred = df["predict"]
@@ -5229,134 +5236,232 @@ def server(input, output, session):
         }
 
 
-        # ------------------------------------------------------
     # ------------------------------------------------------
- # ------------------------------------------------------
-    # 📈 누적 성능 지표 (전체 + Mold별 Compact Version)
+    # 📊 누적 성능 지표 (Baseline vs Current, 8개 비교)
     # ------------------------------------------------------
     @render.ui
     def metric_cards():
+        import json, os
         df = current_data_kf()
         if df.empty or "predict" not in df or "passorfail" not in df:
-            return ui.h6("⚠️ 데이터가 부족하여 성능 지표를 계산할 수 없습니다.", style="color:#999; font-size:13px;")
+            return ui.h6("⚠️ 데이터가 부족하여 성능 지표를 계산할 수 없습니다.",
+                        style="color:#999; font-size:13px;")
 
-        # === 1️⃣ 전체 지표 계산 ===
-        metrics_all = get_metrics(df)
+        # 1️⃣ 현재 실시간 모델 지표 계산
+        metrics_now = get_metrics(df)
 
-        # === 2️⃣ mold_code별 지표 계산 ===
-        mold_metrics = []
-        if "mold_code" in df.columns:
-            for code, sub in df.groupby("mold_code"):
-                mold_metrics.append((code, get_metrics(sub)))
+        # 2️⃣ 기준모델 로드
+        baseline_path = "./results/model_performance_full.json"
+        if os.path.exists(baseline_path):
+            with open(baseline_path, "r", encoding="utf-8") as f:
+                baseline_data = json.load(f)
+            metrics_base = baseline_data.get("train_metrics", baseline_data.get("test_metrics", {}))
+        else:
+            metrics_base = {"accuracy": 0, "precision": 0, "recall": 0, "F1": 0}
 
-        # === 카드 내부 progress bar ===
-        def progress_card(title, value, color):
-            bar_width = f"{value * 100:.1f}%"
+        # 색상 정의
+        colors = {
+            "Accuracy": "#007bff", "Precision": "#28a745",
+            "Recall": "#ffc107", "F1": "#dc3545"
+        }
+
+        # 공용 카드 생성 함수
+        def info_card(title, value, subtitle, color):
             return ui.div(
                 {
                     "style": (
-                        "width:24%; background:#f8f9fa; border-radius:6px; padding:6px 8px; "
-                        "text-align:center; box-shadow:0 1px 2px rgba(0,0,0,0.05);"
+                        "flex:1; background:white; border-radius:8px; "
+                        "padding:10px; text-align:center; box-shadow:0 1px 3px rgba(0,0,0,0.1);"
                     )
                 },
-                ui.h6(title, {"style": "margin-bottom:3px; color:#333; font-size:12px;"}),
-                ui.div(
-                    {"style": "height:8px; width:100%; background:#e9ecef; border-radius:4px; overflow:hidden; margin-bottom:3px;"},
-                    ui.div({"style": f"height:100%; width:{bar_width}; background:{color};"})
-                ),
-                ui.h6(f"{value*100:.1f}%", {"style": "margin:0; color:#111; font-size:13px;"})
+                ui.h6(title, {"style": f"color:{color}; font-size:12px; margin-bottom:4px; font-weight:600;"}),
+                ui.h5(f"{value*100:.2f}%", {"style": "margin:0; color:#333; font-size:16px; font-weight:bold;"}),
+                ui.span(subtitle, {"style": "font-size:11px; color:#777;"})
             )
 
-        colors = {"Accuracy": "#007bff", "Precision": "#28a745", "Recall": "#ffc107", "F1": "#dc3545"}
-
-        # === 3️⃣ 전체 모델 기준 카드 ===
-        cards_all = ui.div(
-            {"style": "display:flex; justify-content:space-between; gap:5px;"},
-            progress_card("Accuracy", metrics_all["Accuracy"], colors["Accuracy"]),
-            progress_card("Precision", metrics_all["Precision"], colors["Precision"]),
-            progress_card("Recall", metrics_all["Recall"], colors["Recall"]),
-            progress_card("F1", metrics_all["F1"], colors["F1"])
+        # 3️⃣ 상단 행 (Baseline)
+        baseline_row = ui.div(
+            {"style": "display:flex; justify-content:space-between; gap:6px; margin-bottom:8px;"},
+            info_card("Baseline Accuracy", metrics_base.get("accuracy", 0), "Train Model", colors["Accuracy"]),
+            info_card("Baseline Precision", metrics_base.get("precision", 0), "Train Model", colors["Precision"]),
+            info_card("Baseline Recall", metrics_base.get("recall", 0), "Train Model", colors["Recall"]),
+            info_card("Baseline F1", metrics_base.get("F1", 0), "Train Model", colors["F1"])
         )
 
-        summary_all = ui.div(
-            {"style": "margin-top:4px; text-align:center; color:#555; font-size:12px;"},
-            ui.tags.b("전체 모델 기준  "),
-            ui.tags.span(f"총 {metrics_all['Total']}건 | 불일치 {metrics_all['Mismatch']}건 | 평균 확률 {metrics_all['Avg_Prob']:.3f}")
+        # 4️⃣ 하단 행 (Current)
+        current_row = ui.div(
+            {"style": "display:flex; justify-content:space-between; gap:6px;"},
+            info_card("Current Accuracy", metrics_now["Accuracy"], "Real-time", colors["Accuracy"]),
+            info_card("Current Precision", metrics_now["Precision"], "Real-time", colors["Precision"]),
+            info_card("Current Recall", metrics_now["Recall"], "Real-time", colors["Recall"]),
+            info_card("Current F1", metrics_now["F1"], "Real-time", colors["F1"])
         )
 
-        # === 4️⃣ Mold별 지표 카드들 ===
-        mold_sections = []
-        for code, m in mold_metrics:
-            mold_cards = ui.div(
-                {"style": "display:flex; justify-content:space-between; gap:5px; margin-top:6px;"},
-                progress_card("Accuracy", m["Accuracy"], colors["Accuracy"]),
-                progress_card("Precision", m["Precision"], colors["Precision"]),
-                progress_card("Recall", m["Recall"], colors["Recall"]),
-                progress_card("F1", m["F1"], colors["F1"])
+        # 5️⃣ 요약 문구
+        summary = ui.div(
+            {"style": "margin-top:8px; text-align:center; color:#555; font-size:12px;"},
+            ui.tags.b("기준 vs 현재 성능 비교 "),
+            ui.tags.span(
+                f"총 {metrics_now['Total']}건 | 불일치 {metrics_now['Mismatch']}건 | 평균확률 {metrics_now['Avg_Prob']:.3f}"
             )
-            summary = ui.div(
-                {"style": "margin-top:3px; text-align:center; color:#666; font-size:11px;"},
-                ui.tags.b(f"Mold {code}: "),
-                ui.tags.span(f"{m['Total']}건 | 불일치 {m['Mismatch']}건 | 평균확률 {m['Avg_Prob']:.3f}")
-            )
-            mold_sections.append(ui.div(mold_cards, summary))
+        )
 
-        # === 5️⃣ 전체 결합 ===
+        # 6️⃣ 최종 전체 카드 묶음
         return ui.div(
-            {"style": "padding:4px 6px;"},
-            ui.h6("전체 모델 기준", {"style": "font-size:13px; font-weight:bold; margin-bottom:4px; color:#222;"}),
-            cards_all,
-            summary_all,
-            ui.hr({"style": "margin:8px 0;"}),
-            ui.h6("Mold Code별 성능", {"style": "font-size:12px; font-weight:bold; margin-bottom:3px; color:#333;"}),
-            *mold_sections
+            {"style": (
+                "padding:10px; background:#fdfdfd; border-radius:8px; "
+                "box-shadow:0 1px 4px rgba(0,0,0,0.05);"
+            )},
+            ui.h6(
+                "📊 누적 성능 지표 (Baseline vs Current, 8개 비교)",
+                {"style": "font-size:13px; font-weight:bold; margin-bottom:6px; color:#333;"}
+            ),
+            baseline_row,
+            current_row,
+            summary
         )
+
 
     # ------------------------------------------------------
-    # 📈 실시간 예측 확률 + Threshold + Mismatch 표시
+    # 📈 실시간 예측 확률 + 동적 위험구간 (역교차 감지)
     # ------------------------------------------------------
     @render.plot
-    @reactive.event(current_data_kf)
+    @reactive.event(current_data_kf, input.analysis_threshold)
     def main_analysis_plot():
         df = current_data_kf()
         fig, ax = plt.subplots(figsize=(10, 4))
 
         if df.empty:
-            ax.text(0.5, 0.5, "데이터가 아직 없습니다.\n▶ 상단의 스트리밍 재생 버튼을 눌러주세요.",
+            ax.text(0.5, 0.5, "데이터가 없습니다.\n▶ 스트리밍을 시작하세요.",
                     ha="center", va="center", fontsize=12)
             ax.axis("off")
             return fig
 
         d = df.copy()
-        d["ts"] = pd.to_datetime(d["real_time"], errors="coerce", format="%Y-%m-%d %H:%M")
-        d = d.dropna(subset=["ts"])
+        d["ts"] = pd.to_datetime(d["real_time"], errors="coerce")
+        d = d.dropna(subset=["ts", "predict_prob", "passorfail"])
 
-        low = input.risk_low() if input.risk_low() is not None else 0.1
-        high = input.risk_high() if input.risk_high() is not None else 0.9
-        threshold_user = input.analysis_threshold() if input.analysis_threshold() is not None else 0.5
-        threshold_base = 0.8303911993972466
+        thr_user = input.analysis_threshold() if input.analysis_threshold() else 0.5
+        thr_base = 0.8303911993972466
 
-        mold_codes = d["mold_code"].unique()
+        bad_min = d.loc[d["passorfail"] == 1, "predict_prob"].min()
+        good_max = d.loc[d["passorfail"] == 0, "predict_prob"].max()
+        if pd.notna(bad_min) and pd.notna(good_max):
+            crossed = bad_min > good_max
+            zone_color = "red" if crossed else "yellow"
+            ax.axhspan(min(bad_min, good_max), max(bad_min, good_max), color=zone_color, alpha=0.25)
+        else:
+            ax.axhspan(0, 1, color="yellow", alpha=0.15)
+
         colors = plt.cm.tab10.colors
+        for i, m in enumerate(d["mold_code"].unique() if "mold_code" in d else ["ALL"]):
+            sub = d[d["mold_code"] == m] if "mold_code" in d else d
+            ax.plot(sub["ts"], sub["predict_prob"], color=colors[i % len(colors)], linewidth=1.8, alpha=0.8, label=f"Mold {m}")
 
-        for i, mcode in enumerate(mold_codes):
-            sub = d[d["mold_code"] == mcode].sort_values("ts")
-            color = colors[i % len(colors)]
-            ax.plot(sub["ts"], sub["predict_prob"], color=color, linewidth=1.8, alpha=0.8, label=f"Mold {mcode}")
+        ax.axhline(thr_base, color="gray", linestyle="--", linewidth=1.5, label=f"Base={thr_base:.2f}")
+        ax.axhline(thr_user, color="red", linestyle="--", linewidth=1.8, label=f"User={thr_user:.2f}")
 
-        mismatch = d[d["predict"] != d["passorfail"]]
-        if not mismatch.empty:
-            ax.scatter(mismatch["ts"], mismatch["predict_prob"],
-                    color="red", marker="x", s=60, linewidths=2,
-                    label="Mismatch (Predict ≠ PassOrFail)")
+        ax.legend(loc="upper right", fontsize=9)
+        ax.grid(True, linestyle="--", alpha=0.3)
+        ax.set_title("실시간 예측 확률 스트리밍 (동적 위험구간 표시)")
+        plt.tight_layout()
+        return fig
 
-        ax.axhspan(low, high, color="yellow", alpha=0.2, label=f"Risk Zone ({low:.2f}–{high:.2f})")
-        ax.axhline(threshold_base, color="gray", linestyle="--", linewidth=1.5, label=f"Base Threshold = {threshold_base:.3f}")
-        ax.axhline(threshold_user, color="red", linestyle="--", linewidth=1.8, label=f"User Threshold = {threshold_user:.2f}")
 
-        ax.set_title("실시간 예측 확률 스트리밍 (전체 Mold 기준)", fontsize=12, pad=10)
-        ax.set_xlabel("Real Time", fontsize=10)
-        ax.set_ylabel("Predict Probability", fontsize=10)
+    # ------------------------------------------------------
+ # 📈 모델 응답 지연 (Latency) ±3σ 감시 + 로그
+# ------------------------------------------------------
+    # 📈 모델 응답 지연 (Latency) ±3σ 감시 + 로그
+    # ------------------------------------------------------
+    @render.plot
+    @reactive.event(current_data_kf)
+    def latency_plot():
+        import json, os
+        df = current_data_kf()
+        fig, ax = plt.subplots(figsize=(10, 4))
+
+        # 1️⃣ 데이터 확인
+        if df.empty or "predict_time" not in df.columns:
+            ax.text(0.5, 0.5, "⏱ 데이터 없음 (predict_time 미수집)",
+                    ha="center", va="center", fontsize=12)
+            ax.axis("off")
+            return fig
+
+        # 2️⃣ 데이터 정리
+        d = df.copy()
+        d["ts"] = pd.to_datetime(d.get("real_time", pd.NaT), errors="coerce")
+        d["predict_time"] = pd.to_numeric(d["predict_time"], errors="coerce")
+        d = d.dropna(subset=["ts", "predict_time"])
+
+        # 3️⃣ 기준모델 평균/표준편차 로드
+        base_path = "./results/model_performance_full.json"
+        baseline_mean, baseline_std = None, None
+
+        if os.path.exists(base_path):
+            with open(base_path, "r", encoding="utf-8") as f:
+                base = json.load(f)
+
+            # train_metrics 기준으로 불러오기
+            train_metrics = base.get("train_metrics", {})
+            if train_metrics:
+                baseline_mean = float(train_metrics.get("elapsed_mean_sec", 0))
+                baseline_std = float(train_metrics.get("elapsed_std_sec", 0))
+
+        # 4️⃣ 실시간 평균 계산
+        current_mean = d["predict_time"].mean()
+
+        # 5️⃣ 3σ 영역 표시
+        if baseline_mean and baseline_std and baseline_std > 0:
+            upper = baseline_mean + 3 * baseline_std
+            lower = max(baseline_mean - 3 * baseline_std, 0)
+
+            # 🟡 노란 영역 (기준 ±3σ)
+            ax.fill_between(
+                d["ts"], lower, upper,
+                color="yellow", alpha=0.25,
+                label=f"Baseline ±3σ ({lower:.3f}–{upper:.3f}s)"
+            )
+            ax.axhline(
+                baseline_mean, color="gray",
+                linestyle="--", linewidth=1.3,
+                label=f"Baseline Mean = {baseline_mean:.3f}s"
+            )
+
+            # 🚨 이상치
+            outliers = d[(d["predict_time"] > upper) ]
+            if not outliers.empty:
+                ax.scatter(outliers["ts"], outliers["predict_time"],
+                        color="red", s=60, marker="x", label="Outlier (>±3σ)")
+
+                # 로그 기록
+                logs = risk_log()
+                new = pd.DataFrame({
+                    "real_time": outliers["real_time"].values,
+                    "mold_code": outliers.get("mold_code", "-"),
+                    "predict_time": outliers["predict_time"].values,
+                    "status": ["3σ 이상치"] * len(outliers)
+                })
+                risk_log.set(pd.concat([new, logs], ignore_index=True).head(100))
+
+        else:
+            # 🚫 기준값이 없을 때 — 안내 문구
+            ax.text(0.5, 0.5,
+                    "⚠️ 기준모델 3σ 정보 없음\n(train_metrics에서 elapsed_mean_sec, elapsed_std_sec 확인 필요)",
+                    ha="center", va="center", fontsize=10)
+            ax.axis("off")
+            return fig
+
+        # 🔴 현재 평균선
+        ax.axhline(current_mean, color="red", linestyle="--", linewidth=1.6,
+                label=f"Current Mean = {current_mean:.3f}s")
+
+        # 🟠 응답시간 라인
+        ax.plot(d["ts"], d["predict_time"], color="orange",
+                linewidth=1.8, alpha=0.8, label="Predict Time (s)")
+
+        # 스타일
+        ax.set_title("모델 응답 지연 (Latency) ±3σ 실시간 감시", fontsize=12)
+        ax.set_xlabel("Real Time"); ax.set_ylabel("Predict Time (s)")
         ax.legend(loc="upper right", fontsize=9)
         ax.grid(True, linestyle="--", alpha=0.3)
         plt.tight_layout()
@@ -5364,101 +5469,187 @@ def server(input, output, session):
 
 
     # ------------------------------------------------------
-    # 📈 모델 응답 지연 (Latency)
+    # 🧠 위험구간 감시 및 로그
     # ------------------------------------------------------
-    @render.plot
-    @reactive.event(current_data_kf)
-    def latency_plot():
-        df = current_data_kf()
-        fig, ax = plt.subplots(figsize=(10, 4))
+    risk_log = reactive.value(pd.DataFrame(columns=["real_time", "mold_code", "predict_prob", "predict", "passorfail"]))
 
-        if df.empty or "predict_time" not in df.columns:
-            ax.text(0.5, 0.5, "데이터가 아직 없습니다.\n▶ 스트리밍을 시작하세요.",
-                    ha="center", va="center", fontsize=12)
-            ax.axis("off")
-            return fig
-
-        d = df.copy()
-        d["ts"] = pd.to_datetime(d["real_time"], errors="coerce", format="%Y-%m-%d %H:%M")
-        d = d.dropna(subset=["ts", "predict_time"])
-
-        d["predict_time"] = pd.to_numeric(d["predict_time"], errors="coerce")
-        ax.plot(d["ts"], d["predict_time"], color="orange", label="Predict Time (s)", alpha=0.7)
-
-        if len(d) >= 5:
-            avg_latency = d["predict_time"].tail(50).mean()
-            ax.axhline(avg_latency, color="red", linestyle="--", alpha=0.5, label=f"Avg: {avg_latency:.3f}s")
-
-        ax.set_title("모델 응답 지연 (Latency)")
-        ax.set_xlabel("Real Time")
-        ax.set_ylabel("Predict Time (s)")
-        ax.legend()
-        plt.tight_layout()
-        return fig
-
-    risk_log = deque(maxlen=100)  # 최근 100건까지만 저장
-
-    # ------------------------------------------------------
-    # ------------------------------------------------------
-    # 🧠 위험 구간 감시용 로그 (reactive 상태)
-    # ------------------------------------------------------
-    risk_log = reactive.value(pd.DataFrame(columns=[
-        "real_time", "mold_code", "predict_prob", "predict", "passorfail"
-    ]))
-
-    # ------------------------------------------------------
-    # ⚠️ 위험 구간 감시 (stream 소비 시점)
-    # ------------------------------------------------------
     @reactive.effect
     @reactive.event(current_data_kf)
     def _risk_zone_monitor():
         df = current_data_kf()
         if df.empty:
             return
-
-        low = input.risk_low() if input.risk_low() is not None else 0.1
-        high = input.risk_high() if input.risk_high() is not None else 0.9
-
+        bad_min = df.loc[df["passorfail"] == 1, "predict_prob"].min()
+        good_max = df.loc[df["passorfail"] == 0, "predict_prob"].max()
+        if pd.isna(bad_min) or pd.isna(good_max):
+            return
+        lower, upper = min(bad_min, good_max), max(bad_min, good_max)
         last_row = df.iloc[-1]
-
         prob = float(last_row.get("predict_prob", 0))
-        if low <= prob <= high:
+        if lower <= prob <= upper:
             logs = risk_log()
-            new_row = pd.DataFrame([{
+            new = pd.DataFrame([{
                 "real_time": last_row.get("real_time", ""),
                 "mold_code": last_row.get("mold_code", ""),
                 "predict_prob": prob,
                 "predict": last_row.get("predict", ""),
                 "passorfail": last_row.get("passorfail", "")
             }])
-            updated = pd.concat([new_row, logs], ignore_index=True).head(50)  # 최근 50개까지만
-            risk_log.set(updated)
+            risk_log.set(pd.concat([new, logs], ignore_index=True).head(50))
+
+
+    @render.plot
+    @reactive.event(current_data_kf, input.analysis_threshold)
+    def pr_curve_plot():
+        fig, ax = plt.subplots(figsize=(6, 4))
+        try:
+            df = current_data_kf()
+            if df.empty or "predict_prob" not in df.columns or "passorfail" not in df.columns:
+                ax.text(0.5, 0.5, "데이터가 없습니다.\n▶ 스트리밍을 시작하세요.", ha="center", va="center")
+                ax.axis("off"); return fig
+
+            # 숫자형으로 강제 변환 + 유효값만 사용
+            y_true = pd.to_numeric(df["passorfail"], errors="coerce")
+            y_prob = pd.to_numeric(df["predict_prob"], errors="coerce")
+            mask = y_true.isin([0, 1]) & np.isfinite(y_prob)
+            y_true, y_prob = y_true[mask].astype(int), y_prob[mask].astype(float)
+
+            if len(np.unique(y_true)) < 2 or len(y_true) < 5:
+                ax.text(0.5, 0.5, "양/불량 클래스가 한쪽만 있거나 표본이 부족합니다.", ha="center", va="center")
+                ax.axis("off"); return fig
+
+            precision, recall, thresholds = precision_recall_curve(y_true, y_prob)
+            pr_auc = auc(recall, precision)
+            ax.plot(recall, precision, linewidth=2, label=f"PR Curve (AUC={pr_auc:.3f})")
+
+            # 현재 threshold 표시
+            thr_user = input.analysis_threshold() if input.analysis_threshold() is not None else 0.5
+            if thresholds.size > 0:
+                idx = np.argmin(np.abs(thresholds - thr_user))
+                idx = min(idx, len(recall) - 1)
+                ax.scatter(recall[idx], precision[idx], s=60, color="red", label=f"Current Thr = {thr_user:.2f}")
+
+            ax.plot([0, 1], [y_true.mean()]*2, linestyle="--", color="gray", label="Baseline")
+            ax.set_title("Precision–Recall Curve"); ax.set_xlabel("Recall"); ax.set_ylabel("Precision")
+            ax.legend(loc="lower left"); ax.grid(True, linestyle="--", alpha=0.3)
+            plt.tight_layout(); return fig
+        except Exception as e:
+            ax.text(0.5, 0.5, f"PRC 오류: {e}", ha="center", va="center")
+            ax.axis("off"); return fig
+        
+    @render.plot
+    @reactive.event(current_data_kf, input.analysis_threshold)
+    def threshold_metric_curve_plot():
+        fig, ax = plt.subplots(figsize=(6, 4))
+        try:
+            df = current_data_kf()
+            if df.empty or "predict_prob" not in df.columns or "passorfail" not in df.columns:
+                ax.text(0.5, 0.5, "데이터가 없습니다.\n▶ 스트리밍을 시작하세요.", ha="center", va="center")
+                ax.axis("off"); return fig
+
+            y_true = pd.to_numeric(df["passorfail"], errors="coerce")
+            y_prob = pd.to_numeric(df["predict_prob"], errors="coerce")
+            mask = y_true.isin([0, 1]) & np.isfinite(y_prob)
+            y_true, y_prob = y_true[mask].astype(int), y_prob[mask].astype(float)
+
+            if len(np.unique(y_true)) < 2 or len(y_true) < 5:
+                ax.text(0.5, 0.5, "양/불량 클래스가 한쪽만 있거나 표본이 부족합니다.", ha="center", va="center")
+                ax.axis("off"); return fig
+
+            thresholds = np.linspace(0, 1, 101)
+            accs, precs, recs, f1s = [], [], [], []
+            for thr in thresholds:
+                y_pred = (y_prob >= thr).astype(int)
+                accs.append(accuracy_score(y_true, y_pred))
+                precs.append(precision_score(y_true, y_pred, zero_division=0))
+                recs.append(recall_score(y_true, y_pred, zero_division=0))
+                f1s.append(f1_score(y_true, y_pred, zero_division=0))
+
+            ax.plot(thresholds, accs, label="Accuracy")
+            ax.plot(thresholds, precs, label="Precision")
+            ax.plot(thresholds, recs, label="Recall")
+            ax.plot(thresholds, f1s, label="F1")
+
+            thr_user = input.analysis_threshold() if input.analysis_threshold() is not None else 0.5
+            ax.axvline(thr_user, color="black", linestyle="--", linewidth=1.2, label=f"Current Thr = {thr_user:.2f}")
+            near_idx = int(np.argmin(np.abs(thresholds - thr_user)))
+            ax.scatter([thresholds[near_idx]], [accs[near_idx]])
+            ax.scatter([thresholds[near_idx]], [precs[near_idx]])
+            ax.scatter([thresholds[near_idx]], [recs[near_idx]])
+            ax.scatter([thresholds[near_idx]], [f1s[near_idx]])
+
+            best_idx = int(np.argmax(f1s))
+            ax.scatter([thresholds[best_idx]], [f1s[best_idx]], s=50, label="Best F1")
+
+            ax.set_title("Threshold–Metric Curve (Acc/Prec/Rec/F1)")
+            ax.set_xlabel("Threshold"); ax.set_ylabel("Metric")
+            ax.legend(loc="best"); ax.grid(True, linestyle="--", alpha=0.3)
+            plt.tight_layout(); return fig
+        except Exception as e:
+            ax.text(0.5, 0.5, f"Threshold–Metric 오류: {e}", ha="center", va="center")
+            ax.axis("off"); return fig
+
+    @render.plot
+    @reactive.event(current_data_kf, input.analysis_threshold)
+    def main_analysis_plot():
+        fig, ax = plt.subplots(figsize=(10, 4))
+        try:
+            df = current_data_kf()
+            required = {"real_time", "predict_prob", "passorfail"}
+            if df.empty or not required.issubset(df.columns):
+                ax.text(0.5, 0.5, "실시간 데이터가 부족합니다.", ha="center", va="center")
+                ax.axis("off"); return fig
+
+            d = df.copy()
+            d["ts"] = pd.to_datetime(d["real_time"], errors="coerce")
+            d["predict_prob"] = pd.to_numeric(d["predict_prob"], errors="coerce")
+            d["passorfail"] = pd.to_numeric(d["passorfail"], errors="coerce")
+            d = d.dropna(subset=["ts", "predict_prob", "passorfail"])
+
+            thr_user = input.analysis_threshold() if input.analysis_threshold() else 0.5
+            thr_base = 0.8303911993972466
+
+            # 동적 위험구역
+            bad_min = d.loc[d["passorfail"] == 1, "predict_prob"].min()
+            good_max = d.loc[d["passorfail"] == 0, "predict_prob"].max()
+            if pd.notna(bad_min) and pd.notna(good_max):
+                crossed = bad_min > good_max
+                ax.axhspan(min(bad_min, good_max), max(bad_min, good_max),
+                        color=("red" if crossed else "yellow"), alpha=0.25)
+            else:
+                ax.axhspan(0, 1, color="yellow", alpha=0.15)
+
+            # 라인
+            if "mold_code" in d.columns:
+                colors = plt.cm.tab10.colors
+                for i, m in enumerate(d["mold_code"].dropna().unique()):
+                    sub = d[d["mold_code"] == m].sort_values("ts")
+                    ax.plot(sub["ts"], sub["predict_prob"], linewidth=1.8, alpha=0.8, label=f"Mold {m}")
+            else:
+                ax.plot(d["ts"], d["predict_prob"], linewidth=1.8, alpha=0.8, label="Predict Prob")
+
+            ax.axhline(thr_base, color="gray", linestyle="--", linewidth=1.5, label=f"Base={thr_base:.2f}")
+            ax.axhline(thr_user, color="red", linestyle="--", linewidth=1.8, label=f"User={thr_user:.2f}")
+            ax.legend(loc="upper right", fontsize=9)
+            ax.grid(True, linestyle="--", alpha=0.3)
+            ax.set_title("실시간 예측 확률 스트리밍 (동적 위험구간)")
+            plt.tight_layout(); return fig
+        except Exception as e:
+            ax.text(0.5, 0.5, f"실시간 예측 그래프 오류: {e}", ha="center", va="center")
+            ax.axis("off"); return fig
 
     # ------------------------------------------------------
-    # 📋 실시간 예측 로그 UI 출력 (테이블 형태)
+    # 📋 로그 뷰어
     # ------------------------------------------------------
     @render.ui
     def log_viewer():
         df = risk_log()
         if df.empty:
-            return ui.h6("📄 현재까지 위험구간 예측이 없습니다.",
-                        style="color:#777; font-size:13px;")
-
-        # 표를 HTML로 변환
-        table_html = df.to_html(
-            index=False,
-            classes="table table-striped table-sm",
-            border=0,
-            justify="center"
-        )
-
+            return ui.h6("📄 현재까지 위험구간 예측이 없습니다.", style="color:#777; font-size:13px;")
+        html = df.to_html(index=False, classes="table table-striped table-sm", border=0, justify="center")
         return ui.div(
-            {"style": (
-                "font-size:12px; color:#333; line-height:1.4; "
-                "max-height:260px; overflow-y:auto; background:#f8f9fa; "
-                "padding:6px; border-radius:6px; border:1px solid #ddd;"
-            )},
-            ui.HTML(table_html)
+            {"style": "font-size:12px; color:#333; line-height:1.4; max-height:260px; overflow-y:auto; background:#f8f9fa; padding:6px; border-radius:6px; border:1px solid #ddd;"},
+            ui.HTML(html)
         )
 
 # ======== 앱 실행 ========
