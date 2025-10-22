@@ -407,6 +407,7 @@ label_map = {
     "mold_code": "금형 코드",
     "molten_volume": "주입한 금속 양",
     "cast_pressure": "주입 압력",
+    "molten_volume_filled": "충진량",
 
     # 냉각 단계
     "upper_mold_temp1": "상부1 금형 온도",
@@ -435,6 +436,7 @@ label_map = {
     "speed_ratio": "상/하부 주입 속도 비율",
 	"pressure_speed_ratio": "주입 압력 비율",
     "shift": "주/야간 교대",
+    "team": "팀",
 }
 
 # ===== 라벨 정의 (표시 텍스트 = 한글, 실제 var = 변수명) =====
@@ -3832,29 +3834,26 @@ def server(input, output, session):
     @reactive.effect
     def _handle_recent_row_selection():
         selected = input.recent_data_table_selected_rows()
-
-        # 선택이 없으면 초기화만 하고 종료
         if not selected:
             last_selected_index.set(None)
             return
 
-        idx = list(selected)[0]
+        flagged_idx = list(selected)[0]
 
         # ✅ 이전과 같은 행이면 모달 재실행 방지
-        if last_selected_index() == idx:
+        if last_selected_index() == flagged_idx:
             return
-
-        last_selected_index.set(idx)
+        last_selected_index.set(flagged_idx)
 
         df = current_data_field()
         if df is None or df.empty:
             return
 
-        # 3σ + 불량 필터 동일하게 적용
         data = df.copy()
         if "passorfail" in data.columns:
             data["passorfail"] = data["passorfail"].map({0: "양품", 1: "불량"}).fillna(data["passorfail"])
 
+        # === 3σ + 불량 필터 동일하게 적용 ===
         numeric_cols = data.select_dtypes(include="number").columns.tolist()
         if numeric_cols:
             means = data[numeric_cols].mean()
@@ -3865,46 +3864,81 @@ def server(input, output, session):
             mask_3sigma = pd.Series(False, index=data.index)
 
         mask_fail = (data["passorfail"] == "불량") if "passorfail" in data.columns else pd.Series(False, index=data.index)
-        flagged = data[mask_3sigma | mask_fail].copy().tail(200).reset_index(drop=True)
+        flagged = data[mask_3sigma | mask_fail].copy()
 
-        if idx >= len(flagged):
+        if flagged.empty:
             return
 
-        row = flagged.iloc[idx].to_dict()
-
-        # ✅ 현재 행 데이터 저장 (예측탭에서 활용 가능)
+        # ✅ 클릭된 행(flagged 내 인덱스)을 원본 df의 실제 인덱스로 변환
+        original_index = flagged.index[flagged_idx]
+        latest = data.loc[original_index]   # ← ✅ 원본 df에서 정확히 그 행을 가져옴
+        row = latest.to_dict()
         selected_row_for_prediction.set(row)
 
-        # ✅ 모달 표시
+        # ✅ 전체 평균/표준편차 기준으로 이상 감지
+        mean_std = data[numeric_cols].describe().T[["mean", "std"]]
+        anomalies = []
+        for col in numeric_cols:
+            val = latest[col]
+            mean = mean_std.loc[col, "mean"]
+            std = mean_std.loc[col, "std"]
+            if pd.notna(val) and pd.notna(std) and std > 0:
+                if abs(val - mean) > 3 * std:
+                    anomalies.append((col, val, mean, std))
+
+        # === 이상 감지 결과 구성 ===
+        if not anomalies:
+            anomaly_html = ui.p("✅ 선택된 행에서는 이상 조건이 없습니다.", style="color:green; margin:6px 0;")
+        else:
+            alert_items = []
+            for col, val, mean, std in anomalies:
+                label = label_map.get(col, col)
+                diff = val - mean
+                direction = "높음 ↑" if diff > 0 else "낮음 ↓"
+                alert_items.append(
+                    f"<li><b>{label}</b>: {val:.2f} "
+                    f"(평균 {mean:.2f} ± {3*std:.2f}) "
+                    f"→ <span style='color:red;font-weight:600;'>{direction}</span></li>"
+                )
+            anomaly_html = ui.HTML(f"""
+                <div style="background:#fff7f7; padding:12px; border-radius:8px;">
+                    <p style="font-weight:bold; color:#b30000;">⚠ 공정 이상 감지 항목 ({len(anomalies)}개)</p>
+                    <ul style="margin:0 0 4px 20px;">{''.join(alert_items)}</ul>
+                    <p style='color:gray;font-size:13px;margin-top:4px;'>※ 이 행의 값이 평균 ±3σ를 벗어났습니다.</p>
+                </div>
+            """)
+
+        # === 모달 표시 ===
         ui.modal_show(
             ui.modal(
                 ui.div(
                     ui.h5("📋 선택된 행 상세 정보", style="font-weight:bold;"),
+                    anomaly_html,
+                    ui.hr(),
+                    # ✅ 변수명 한글 변환
                     ui.tags.table(
                         {"class": "table table-striped table-bordered table-sm"},
                         ui.tags.tbody(
                             *[
                                 ui.tags.tr(
-                                    ui.tags.td(str(k), style="font-weight:bold; white-space:nowrap;"),
+                                    ui.tags.td(label_map.get(k, k), style="font-weight:bold; white-space:nowrap;"),
                                     ui.tags.td(str(v))
                                 )
-                                for k, v in row.items()
+                                for k, v in latest.items()
                             ]
                         ),
                     ),
                     style="max-height:60vh; overflow-y:auto;"
                 ),
-                title=f"🔍 실시간 데이터 상세 (행 {idx + 1})",
+                title=f"🔍 실시간 데이터 상세",
                 easy_close=True,
                 footer=ui.div(
                     {"style": "display:flex; justify-content:flex-end; gap:8px;"},
                     ui.input_action_button("close_recent_modal", "닫기", class_="btn btn-secondary"),
-                    # ✅ 새 버튼: 예측 및 개선 탭으로 이동
                     ui.input_action_button("goto_quality_prediction", "예측 및 개선 탭으로 이동", class_="btn btn-primary"),
                 ),
             )
         )
-
 
     # ✅ 닫기 버튼 동작
     @reactive.effect
