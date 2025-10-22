@@ -1039,7 +1039,7 @@ def analysis_page_ui():
                     ui.input_slider("risk_high", "상한 위험", min=0.0, max=1.0, value=0.90, step=0.01),
 
                     ui.hr(),
-                    ui.h5("📡 실시간 현황 관리"),
+                    ui.h5(" 실시간 현황 관리"),
                     ui.output_ui("sidebar_realtime_panel"),
                     ui.br(),
                     ui.output_ui("comm_status"),
@@ -1258,10 +1258,16 @@ def main_page(selected_tab: str):
 
 
             ui.nav_panel("원인 분석",
-
+                ui.card(
+                    ui.card_header("불량 및 공정 에러 발생 조건", style="text-align:center;"),
+                    ui.output_plot("local_factor_plot", click=True),   # 클릭 가능한 그래프
+                    ui.hr(),
+                    ui.output_ui("local_factor_desc"),      # 텍스트 설명
+                    ui.output_ui("sensor_detail_modal")     # 클릭 시 뜨는 모달창
+                ),
                 # ──────────────── 2행: 실시간 데이터 표 ────────────────
                 ui.card(
-                    ui.card_header("📊 실시간 데이터", style="text-align:center;"),
+                    ui.card_header("실시간 데이터", style="text-align:center;"),
                     ui.div(
                         ui.output_data_frame("recent_data_table"),
                         # 🔹 스크롤이 생기도록 wrapping div에 명시적 width/overflow 지정
@@ -1273,14 +1279,6 @@ def main_page(selected_tab: str):
                         )
                     ),
                     style="width:100%;"
-                ),
-
-                ui.card(
-                    ui.card_header("불량 및 공정 에러 발생 조건", style="text-align:center;"),
-                    ui.output_plot("local_factor_plot", click=True),   # 클릭 가능한 그래프
-                    ui.hr(),
-                    ui.output_ui("local_factor_desc"),      # 텍스트 설명
-                    ui.output_ui("sensor_detail_modal")     # 클릭 시 뜨는 모달창
                 ),
             ),
 
@@ -3927,7 +3925,7 @@ def server(input, output, session):
                     100% {{ box-shadow: 0 0 0px transparent; }}
                 }}
             """),
-            ui.h4("🤖 실시간 품질 판정", style="margin-bottom:10px; color:#333;"),
+            ui.h4("실시간 품질 판정", style="margin-bottom:10px; color:#333;"),
             ui.h3(f"{emoji} {label}", style=f"color:{color}; font-weight:bold; margin-bottom:6px;"),
             ui.h5(f"누적 불량률: {fail_rate:.1f}%", style="color:#555; margin-bottom:6px;"),
             ui.p(f"데이터 시각: {latest['real_time']}", style="color:#777; font-size:14px; margin-top:6px;"),
@@ -5346,10 +5344,10 @@ def server(input, output, session):
                 "padding:10px; background:#fdfdfd; border-radius:8px; "
                 "box-shadow:0 1px 4px rgba(0,0,0,0.05);"
             )},
-            ui.h6(
-                "📊 누적 성능 지표 (Baseline vs Current, 8개 비교)",
-                {"style": "font-size:13px; font-weight:bold; margin-bottom:6px; color:#333;"}
-            ),
+            # ui.h6(
+            #     "📊 누적 성능 지표 (Baseline vs Current, 8개 비교)",
+            #     {"style": "font-size:13px; font-weight:bold; margin-bottom:6px; color:#333;"}
+            # ),
             baseline_row,
             current_row,
             summary
